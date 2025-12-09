@@ -1,0 +1,742 @@
+// frontend/src/components/StudentDashboard.tsx
+import React, { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
+import { useNavigate } from 'react-router-dom';
+import {
+  Box,
+  Heading,
+  Text,
+  VStack,
+  HStack,
+  Button,
+  Spinner,
+  Alert,
+  AlertIcon,
+  useToast,
+  Progress,
+  Flex,
+  Container,
+  Badge,
+  Center,
+  Modal,
+  ModalOverlay,
+  ModalContent,
+  ModalHeader,
+  ModalFooter,
+  ModalBody,
+  ModalCloseButton,
+  useDisclosure,
+  Textarea,
+  Tag,
+} from '@chakra-ui/react';
+import { motion } from 'framer-motion';
+import { Lock, Plus, PlayCircle, Layout, FileText, Users, Network } from 'lucide-react';
+
+import ChatInterface from './ChatInterface';
+import CheckpointList from './CheckpointList';
+
+// --- Interfaces ---
+interface Submission {
+  id: number;
+  title: string;
+  status: 'Pending' | 'Approved' | 'Rejected' | 'In Progress' | 'Completed' | 'Archived';
+  progress: number | null;
+  project_id: number | null;
+  ai_similarity_report?: { title: string; abstract_text: string; student: string } | null;
+  ai_suggested_features?: string | null;
+  final_report?: string | null;
+  ai_report_feedback?: string | null;
+  ai_resume_points: string[] | null;
+  team_members?: { id: number; username: string; role?: string }[];
+}
+
+interface VivaQuestion {
+  id: number;
+  question_text: string;
+  student_answer: string | null;
+  ai_score: number | null;
+  ai_feedback: string | null;
+}
+
+interface VivaSession {
+  id: number;
+  questions: VivaQuestion[];
+}
+
+interface UserSimple {
+  id: number;
+  username: string;
+  role: string;
+}
+
+interface Checkpoint {
+  id: number;
+  title: string;
+  description: string;
+  deadline: string | null;
+  is_completed: boolean;
+  date_completed: string | null;
+}
+
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: { opacity: 1, transition: { staggerChildren: 0.1 } },
+};
+
+const itemVariants = {
+  hidden: { opacity: 0, y: 20 },
+  visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' } },
+};
+
+const MotionBox = motion(Box);
+const MotionVStack = motion(VStack);
+
+const getUniqueMembers = (members: any[] | undefined) => {
+  if (!members || !Array.isArray(members)) return [];
+  const seen: { [key: number]: any } = {};
+  members.forEach(m => {
+    if (m && typeof m.id !== 'undefined') seen[m.id] = m;
+  });
+  return Object.values(seen);
+};
+
+const StudentDashboard: React.FC = () => {
+  const navigate = useNavigate();
+  const toast = useToast();
+
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [generatingResume, setGeneratingResume] = useState<number | null>(null);
+
+  // --- Checkpoint State ---
+  const [projectCheckpoints, setProjectCheckpoints] = useState<{ [projectId: number]: Checkpoint[] }>({});
+  const [isGeneratingRoadmap, setIsGeneratingRoadmap] = useState<number | null>(null);
+
+  // --- Messaging State ---
+  const { isOpen: isMsgOpen, onOpen: onMsgOpen, onClose: onMsgClose } = useDisclosure();
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+
+  // --- Viva State ---
+  const { isOpen: isVivaOpen, onOpen: onVivaOpen, onClose: onVivaClose } = useDisclosure();
+  const [vivaSession, setVivaSession] = useState<VivaSession | null>(null);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [vivaAnswer, setVivaAnswer] = useState('');
+  const [loadingViva, setLoadingViva] = useState(false);
+  const [submittingViva, setSubmittingViva] = useState(false);
+  const [vivaError, setVivaError] = useState('');
+
+  const [currentUser, setCurrentUser] = useState<{ id: number; username: string; role: string } | null>(null);
+
+  const teamMembers: UserSimple[] = React.useMemo(() => {
+    if (selectedProjectId === null) return [];
+    const found = submissions.find(s => s.project_id === selectedProjectId);
+    if (!found || !Array.isArray(found.team_members)) return [];
+    return found.team_members.map(m => ({
+      id: m.id,
+      username: m.username,
+      role: m.role ?? 'Student',
+    }));
+  }, [selectedProjectId, submissions]);
+
+  useEffect(() => {
+    const loadMe = async () => {
+      const idStr = localStorage.getItem('user_id');
+      const username = localStorage.getItem('username');
+      const role = localStorage.getItem('role');
+
+      if (idStr && username && role) {
+        setCurrentUser({ id: Number(idStr), username, role });
+        return;
+      }
+
+      try {
+        const token = localStorage.getItem('accessToken');
+        if (!token) return;
+        const res = await axios.get('http://127.0.0.1:8000/auth/users/me/', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = res.data;
+        setCurrentUser({
+          id: data.id,
+          username: data.username,
+          role: data.role ?? (data.is_staff ? 'Teacher' : 'Student'),
+        });
+        localStorage.setItem('user_id', String(data.id));
+        localStorage.setItem('username', data.username);
+        if (data.role) localStorage.setItem('role', data.role);
+      } catch (e) {
+        console.error('Failed to fetch current user', e);
+      }
+    };
+    loadMe();
+  }, []);
+
+  const fetchSubmissions = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    setSubmissions([]);
+    try {
+      const token = localStorage.getItem('accessToken');
+      if (!token) {
+        navigate('/');
+        return;
+      }
+      const response = await axios.get('http://127.0.0.1:8000/student/submissions/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const subs: Submission[] = Array.isArray(response.data) ? response.data : [];
+      if (!token) throw new Error('No token');
+
+      await axios.post(
+        `http://127.0.0.1:8000/projects/${projectId}/resume/generate/`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      toast({ title: 'Resume Points Generated!', status: 'success' });
+
+      const response = await axios.get('http://127.0.0.1:8000/student/submissions/', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const subs: Submission[] = Array.isArray(response.data) ? response.data : [];
+      setSubmissions(subs);
+    } catch (e) {
+      console.error('Resume generation error:', e);
+      toast({ title: 'Generation Failed', status: 'error' });
+    } finally {
+      setGeneratingResume(null);
+    }
+  };
+
+  const openMessageModal = (projectId: number) => {
+    setSelectedProjectId(projectId);
+    onMsgOpen();
+  };
+
+  const closeMessageModal = () => {
+    onMsgClose();
+    setSelectedProjectId(null);
+  };
+
+  const startVivaSession = async (projectId: number) => {
+    setLoadingViva(true);
+    setVivaError('');
+    setVivaSession(null);
+    setCurrentQuestionIndex(0);
+    setVivaAnswer('');
+    onVivaOpen();
+    try {
+      const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('No token');
+
+      const response = await axios.post(
+        'http://127.0.0.1:8000/ai/viva/',
+        { project_id: projectId },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setVivaSession(response.data || null);
+    } catch (err: any) {
+      setVivaError(err?.response?.data?.error || 'Failed to start Viva session.');
+      console.error('Viva Start Error:', err);
+    } finally {
+      setLoadingViva(false);
+    }
+  };
+
+  const submitVivaAnswer = async () => {
+    if (!vivaSession || !vivaAnswer.trim()) return;
+    const currentQuestion = vivaSession.questions[currentQuestionIndex];
+    setSubmittingViva(true);
+    try {
+      const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('No token');
+
+      const response = await axios.post(
+        'http://127.0.0.1:8000/ai/viva/evaluate/',
+        { question_id: currentQuestion.id, answer: vivaAnswer },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      const updatedQuestion = response.data;
+      setVivaSession(prev => {
+        if (!prev) return null;
+        const newQuestions = [...prev.questions];
+        newQuestions[currentQuestionIndex] = updatedQuestion;
+        return { ...prev, questions: newQuestions };
+      });
+      setVivaAnswer('');
+    } catch (err: any) {
+      toast({
+        title: 'Evaluation Failed',
+        description: err?.response?.data?.error || 'Could not submit answer.',
+        status: 'error',
+      });
+      console.error('Viva Eval Error:', err);
+    } finally {
+      setSubmittingViva(false);
+    }
+  };
+
+  const nextQuestion = () => {
+    if (vivaSession && currentQuestionIndex < vivaSession.questions.length - 1) {
+      setCurrentQuestionIndex(prev => prev + 1);
+      setVivaAnswer('');
+    }
+  };
+
+  const prevQuestion = () => {
+    if (currentQuestionIndex > 0) {
+      setCurrentQuestionIndex(prev => prev - 1);
+    }
+  };
+
+  const getStatusBadge = (status: Submission['status']) => {
+    switch (status) {
+      case 'Approved': return { colorScheme: 'cyan', text: 'Approved' };
+      case 'In Progress': return { colorScheme: 'yellow', text: 'In Progress' };
+      case 'Completed': return { colorScheme: 'green', text: 'Completed' };
+      case 'Archived': return { colorScheme: 'gray', text: 'Archived' };
+      case 'Rejected': return { colorScheme: 'red', text: 'Rejected' };
+      default: return { colorScheme: 'gray', text: 'Pending' };
+    }
+  };
+
+  if (loading) {
+    return (
+      <Center h="calc(100vh - 72px)" color="white">
+        <Spinner size="xl" color="cyan.400" thickness="4px" />
+        <Text ml={4} fontSize="xl">Loading Dashboard...</Text>
+      </Center>
+    );
+  }
+
+  return (
+    <Flex w="100%" minH="calc(100vh - 72px)" justify="center" position="relative" color="white" bgGradient="linear(to-bl, #060B26, #0A042A)">
+      <MotionBox position="absolute" top="0" left="0" w="80" h="80" rounded="full" bgGradient="radial(cyan.800, transparent)" filter="blur(200px)" opacity={0.2} zIndex={-1} />
+      <MotionBox position="absolute" bottom="0" right="0" w="96" h="96" rounded="full" bgGradient="radial(blue.800, transparent)" filter="blur(200px)" opacity={0.2} zIndex={-1} />
+
+      <Container
+        maxW="container.xl"
+        h="100%"
+        overflowY="auto"
+        py={{ base: 6, md: 8 }}
+        sx={{
+          '&::-webkit-scrollbar': { width: '4px' },
+          '&::-webkit-scrollbar-track': { background: 'transparent' },
+          '&::-webkit-scrollbar-thumb': { bg: 'rgba(255,255,255,0.2)', borderRadius: '24px' }
+        }}
+      >
+        <VStack spacing={8}>
+          <motion.div initial={{ opacity: 0, y: -40 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.8 }}>
+            <Heading as="h1" size="2xl" bgGradient="linear(to-r, cyan.400, blue.400)" bgClip="text" fontWeight="extrabold" textAlign="center">
+              My Project Dashboard
+            </Heading>
+          </motion.div>
+
+          <Button
+            onClick={() => navigate('/submit')}
+            bgGradient="linear(to-r, cyan.500, blue.500)"
+            color="white"
+            size="lg"
+            leftIcon={<Plus size={20} />}
+            _hover={{ bgGradient: 'linear(to-r, cyan.400, blue.400)', transform: 'translateY(-2px)' }}
+            transition="all 0.3s ease"
+          >
+            Submit New Project
+          </Button>
+
+          {error && (
+            <Alert status="error" borderRadius="lg" bg="rgba(255,0,0,0.1)" border="1px solid rgba(255,0,0,0.3)">
+              <AlertIcon color="red.300" />
+              {error}
+            </Alert>
+          )}
+
+          {submissions.length === 0 && !error ? (
+            <Center h="40vh"><Text fontSize="xl" color="gray.400">You haven't submitted any projects yet.</Text></Center>
+          ) : (
+            <MotionVStack w="full" spacing={6} variants={containerVariants} initial="hidden" animate="visible">
+              {submissions.map((submission) => {
+                const statusInfo = getStatusBadge(submission.status);
+                const canAction = (submission.status === 'Approved' || submission.status === 'In Progress') && submission.project_id != null;
+                const uniqueMembers = getUniqueMembers(submission.team_members);
+                return (
+                  <MotionBox
+                    key={submission.id}
+                    variants={itemVariants}
+                    w="full"
+                    p={6}
+                    bg="rgba(28, 38, 78, 0.5)"
+                    border="1px solid rgba(255,255,255,0.15)"
+                    borderRadius="2xl"
+                    boxShadow="0 10px 30px rgba(0,0,0,0.2)"
+                    whileHover={{ transform: 'translateY(-5px)', borderColor: 'rgba(0, 255, 255, 0.5)' }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <VStack align="stretch" spacing={5}>
+                      <Flex justify="space-between" align="center" direction={{ base: 'column', md: 'row' }} gap={4}>
+                        <VStack align={{ base: 'center', md: 'flex-start' }}>
+                          <Heading size="md" color="cyan.300">{submission.title}</Heading>
+                          <Badge colorScheme={statusInfo.colorScheme} variant="solid">{statusInfo.text}</Badge>
+                        </VStack>
+                        <HStack wrap="wrap" spacing={2}>
+                          <Button
+                            onClick={() => canAction && startVivaSession(submission.project_id!)}
+                            isDisabled={!canAction}
+                            rightIcon={canAction ? <PlayCircle size={16} /> : <Lock size={16} />}
+                            colorScheme="teal"
+                            variant="solid"
+                            size="sm"
+                            _disabled={{ opacity: 0.6, cursor: 'not-allowed' }}
+                          >
+                            AI Viva
+                          </Button>
+
+                          <Button
+                            onClick={() => canAction && openMessageModal(submission.project_id!)}
+                            isDisabled={!canAction}
+                            leftIcon={<Users size={16} />}
+                            colorScheme="blue"
+                            variant="outline"
+                            size="sm"
+                          >
+                            Team
+                          </Button>
+
+                          <Button
+                            onClick={() => navigate(`/projects/${submission.project_id}/tasks`)}
+                            leftIcon={<Layout size={16} />}
+                            colorScheme="orange"
+                            variant="outline"
+                            size="sm"
+                          >
+                            Tasks
+                          </Button>
+
+                          <Button
+                            onClick={() => canAction && navigate(`/projects/${submission.project_id}/code-review`)}
+                            isDisabled={!canAction}
+                            leftIcon={<FileText size={16} />}
+                            colorScheme="purple"
+                            variant="outline"
+                            size="sm"
+                          >
+                            Code Review
+                          </Button>
+                        </HStack>
+                      </Flex>
+
+                      {submission.ai_suggested_features && (
+                        <Box
+                          w="full"
+                          p={4}
+                          bg="rgba(255, 165, 0, 0.06)"
+                          borderRadius="md"
+                          borderLeft="4px solid"
+                          borderColor="orange.400"
+                        >
+                          <Heading size="sm" color="orange.200" mb={2}>
+                            AI Feedback: Idea Similarity
+                          </Heading>
+                          <Text fontSize="sm" color="white" mb={3}>
+                            Your project idea appears similar to an earlier submission:
+                            <Text as="span" fontWeight="bold" ml={1}>"{submission.ai_similarity_report?.title}"</Text>.
+                          </Text>
+
+                          <Text fontSize="sm" fontWeight="bold" color="orange.200" mb={1}>
+                            Suggestions to make it unique:
+                          </Text>
+                          <Text fontSize="sm" color="white" whiteSpace="pre-wrap">
+                            {submission.ai_suggested_features}
+                          </Text>
+
+                          <Text fontSize="xs" color="gray.400" mt={3}>
+                            Use these suggestions to refine your plan before teacher review.
+                          </Text>
+                        </Box>
+                      )}
+
+                      {canAction && (
+                        <VStack align="stretch" spacing={4} pt={4} borderTop="1px solid" borderColor="rgba(255,255,255,0.1)">
+                          <HStack>
+                            <Text fontSize="sm" fontWeight="bold" color="gray.200" minW="80px">Progress:</Text>
+                            <Progress value={submission.progress ?? 0} size="sm" colorScheme="cyan" borderRadius="full" flex="1" bg="rgba(255,255,255,0.1)" />
+                            <Text fontWeight="bold" color="cyan.300">{submission.progress ?? 0}%</Text>
+                          </HStack>
+
+                          {uniqueMembers.length > 0 && (
+                            <Flex gap={4} direction={{ base: 'column', md: 'row' }}>
+                              {uniqueMembers.some((m: any) => m.role === 'Teacher' || m.role === 'HOD/Admin') && (
+                                <Box flex="1" p={3} bg="rgba(128, 90, 213, 0.15)" borderRadius="md" borderLeft="4px solid" borderColor="purple.400">
+                                  <Text fontSize="xs" fontWeight="bold" color="purple.200" mb={2} letterSpacing="wide">
+                                    PROJECT GUIDE
+                                  </Text>
+                                  <HStack wrap="wrap">
+                                    {uniqueMembers
+                                      .filter((m: any) => m.role === 'Teacher' || m.role === 'HOD/Admin')
+                                      .map((m: any) => (
+                                        <Tag key={m.id} size="md" variant="solid" colorScheme="purple">
+                                          {m.username}
+                                        </Tag>
+                                      ))}
+                                  </HStack>
+                                </Box>
+                              )}
+
+                              <Box flex="1" p={3} bg="rgba(49, 130, 206, 0.15)" borderRadius="md" borderLeft="4px solid" borderColor="blue.400">
+                                <Text fontSize="xs" fontWeight="bold" color="blue.200" mb={2} letterSpacing="wide">
+                                  TEAM MATES
+                                </Text>
+                                <HStack wrap="wrap">
+                                  {uniqueMembers
+                                    .filter((m: any) => m.role === 'Student' && m.username !== 'You')
+                                    .map((m: any) => (
+                                      <Tag key={m.id} size="md" variant="solid" colorScheme="blue">
+                                        {m.username}
+                                      </Tag>
+                                    ))}
+                                  {uniqueMembers.filter((m: any) => m.role === 'Student' && m.username !== 'You').length === 0 && (
+                                    <Text fontSize="xs" color="gray.400">No other members.</Text>
+                                  )}
+                                </HStack>
+                              </Box>
+                            </Flex>
+                          )}
+
+                          {/* --- NEW: Checkpoint List Integration --- */}
+                          {submission.project_id && (
+                            <Box mt={4}>
+                              <Flex justify="space-between" align="center" mb={4}>
+                                <Heading size="md" color="cyan.300">Project Roadmap</Heading>
+                                <Button
+                                  size="sm"
+                                  colorScheme="purple"
+                                  onClick={() => handleGenerateRoadmap(submission.project_id!)}
+                                  isLoading={isGeneratingRoadmap === submission.project_id}
+                                  leftIcon={<Network size={16} />}
+                                >
+                                  Generate AI Roadmap
+                                </Button>
+                              </Flex>
+                              <CheckpointList
+                                checkpoints={projectCheckpoints[submission.project_id] || []}
+                                projectId={submission.project_id}
+                                onUpdate={() => fetchCheckpoints(submission.project_id!)}
+                              />
+                            </Box>
+                          )}
+
+                          {submission.project_id && (
+                            <Box mt={4} p={4} bg="linear-gradient(to right, #2d3748, #1a202c)" borderRadius="md" border="1px solid" borderColor="purple.500">
+                              <Flex justify="space-between" align="center" mb={2}>
+                                <Heading size="sm" color="purple.300">Career & Resume</Heading>
+                                {!submission.ai_resume_points && (
+                                  <Button
+                                    size="xs"
+                                    colorScheme="purple"
+                                    isLoading={generatingResume === submission.project_id}
+                                    onClick={() => handleGenerateResume(submission.project_id!)}
+                                  >
+                                    Generate Bullet Points
+                                  </Button>
+                                )}
+                              </Flex>
+
+                              {submission.ai_resume_points ? (
+                                <VStack align="start" spacing={1} mt={2}>
+                                  <Text fontSize="xs" color="gray.400" mb={1}>Copy these to your CV:</Text>
+                                  {submission.ai_resume_points.map((point, i) => (
+                                    <HStack key={i} align="start">
+                                      <Text color="purple.400">•</Text>
+                                      <Text fontSize="sm" color="white">{point}</Text>
+                                    </HStack>
+                                  ))}
+                                </VStack>
+                              ) : (
+                                <Text fontSize="xs" color="gray.500">
+                                  Generate professional bullet points describing this project for your job applications.
+                                </Text>
+                              )}
+                            </Box>
+                          )}
+
+                          {submission.project_id && (
+                            <Box mt={6} p={4} bg="rgba(50, 50, 100, 0.3)" borderRadius="md" border="1px dashed" borderColor="cyan.600">
+                              <Heading size="sm" color="cyan.300" mb={2}>Project Documentation</Heading>
+
+                              {submission.final_report ? (
+                                <VStack align="start">
+                                  <Text color="green.300" fontSize="sm">✅ Documentation Uploaded</Text>
+                                  {submission.ai_report_feedback ? (
+                                    <Box w="full" mt={2} p={3} bg="blackAlpha.400" borderRadius="md">
+                                      <Text fontWeight="bold" color="yellow.300" fontSize="xs" mb={1}>AI Analysis Result:</Text>
+                                      <Text
+                                        fontSize="sm"
+                                        whiteSpace="pre-wrap"
+                                        maxHeight="200px"
+                                        overflowY="auto"
+                                      >
+                                        {submission.ai_report_feedback}
+                                      </Text>
+                                    </Box>
+                                  ) : (
+                                    <Text fontSize="xs" color="gray.400">Waiting for teacher to analyze...</Text>
+                                  )}
+                                </VStack>
+                              ) : (
+                                <Box>
+                                  <Text fontSize="sm" color="gray.300" mb={2}>Upload your full project documentation (PDF).</Text>
+                                  <input
+                                    type="file"
+                                    accept=".pdf"
+                                    onChange={(e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file && submission.project_id) {
+                                        handleReportUpload(submission.project_id, file);
+                                      }
+                                    }}
+                                    style={{ color: 'white' }}
+                                  />
+                                </Box>
+                              )}
+                            </Box>
+                          )}
+                        </VStack>
+                      )}
+                    </VStack>
+                  </MotionBox>
+                );
+              })}
+            </MotionVStack>
+          )}
+        </VStack>
+      </Container>
+
+      {/* --- Messaging Modal --- */}
+      <Modal isOpen={isMsgOpen} onClose={closeMessageModal} size="xl">
+        <ModalOverlay />
+        <ModalContent bg="transparent" boxShadow="none">
+          {selectedProjectId !== null && currentUser && (
+            <ChatInterface
+              projectId={selectedProjectId}
+              currentUser={currentUser}
+              teamMembers={teamMembers}
+            />
+          )}
+          {selectedProjectId !== null && !currentUser && (
+            <Box p={6}>
+              <Text color="yellow.200">Unable to open chat: user not loaded. Try reloading the page.</Text>
+            </Box>
+          )}
+        </ModalContent>
+      </Modal>
+
+      {/* --- Viva Modal --- */}
+      <Modal isOpen={isVivaOpen} onClose={onVivaClose} size="2xl">
+        <ModalOverlay />
+        <ModalContent bg="rgba(20, 28, 58, 0.98)" borderRadius="2xl" border="1px solid rgba(255,255,255,0.15)">
+          <ModalHeader bgGradient="linear(to-r, teal.500, cyan.500)" bgClip="text" fontWeight="extrabold">
+            AI Viva Examination
+          </ModalHeader>
+          <ModalCloseButton color="white" />
+          <ModalBody>
+            {loadingViva && (
+              <Center py={10}>
+                <Spinner size="xl" color="teal.400" />
+                <Text ml={4} color="white">Generating Questions...</Text>
+              </Center>
+            )}
+            {vivaError && !loadingViva && (
+              <Alert status="error" variant="left-accent">
+                <AlertIcon />
+                {vivaError}
+              </Alert>
+            )}
+            {vivaSession && !loadingViva && (
+              <VStack spacing={4} align="stretch">
+                <Progress
+                  value={((currentQuestionIndex + 1) / vivaSession.questions.length) * 100}
+                  size="sm"
+                  colorScheme="teal"
+                  borderRadius="full"
+                />
+                <Text fontSize="sm" color="gray.400">
+                  Question {currentQuestionIndex + 1} of {vivaSession.questions.length}
+                </Text>
+                <Box p={4} bg="rgba(0,0,0,0.3)" borderRadius="md">
+                  <Text fontWeight="bold" color="teal.300" mb={2}>
+                    {vivaSession.questions[currentQuestionIndex].question_text}
+                  </Text>
+                  {vivaSession.questions[currentQuestionIndex].student_answer ? (
+                    <VStack align="start" spacing={2}>
+                      <Text fontSize="sm" color="gray.300">
+                        Your Answer: {vivaSession.questions[currentQuestionIndex].student_answer}
+                      </Text>
+                      {vivaSession.questions[currentQuestionIndex].ai_score !== null && (
+                        <>
+                          <Badge colorScheme={vivaSession.questions[currentQuestionIndex].ai_score! >= 7 ? 'green' : vivaSession.questions[currentQuestionIndex].ai_score! >= 5 ? 'yellow' : 'red'}>
+                            Score: {vivaSession.questions[currentQuestionIndex].ai_score}/10
+                          </Badge>
+                          <Text fontSize="sm" color="gray.400">
+                            {vivaSession.questions[currentQuestionIndex].ai_feedback}
+                          </Text>
+                        </>
+                      )}
+                    </VStack>
+                  ) : (
+                    <VStack spacing={3} align="stretch">
+                      <Textarea
+                        placeholder="Type your answer here..."
+                        value={vivaAnswer}
+                        onChange={(e) => setVivaAnswer(e.target.value)}
+                        bg="rgba(0,0,0,0.2)"
+                        borderColor="rgba(255,255,255,0.2)"
+                        _hover={{ borderColor: 'teal.400' }}
+                        _focus={{ borderColor: 'teal.300' }}
+                        rows={4}
+                        color="white"
+                      />
+                      <Button
+                        colorScheme="teal"
+                        onClick={submitVivaAnswer}
+                        isLoading={submittingViva}
+                        isDisabled={!vivaAnswer.trim()}
+                      >
+                        Submit Answer
+                      </Button>
+                    </VStack>
+                  )}
+                </Box>
+                <HStack justify="space-between">
+                  <Button
+                    onClick={prevQuestion}
+                    isDisabled={currentQuestionIndex === 0}
+                    variant="ghost"
+                    color="white"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    onClick={nextQuestion}
+                    isDisabled={currentQuestionIndex === vivaSession.questions.length - 1}
+                    variant="ghost"
+                    color="white"
+                  >
+                    Next
+                  </Button>
+                </HStack>
+              </VStack>
+            )}
+          </ModalBody>
+          <ModalFooter>
+            <Button colorScheme="gray" onClick={onVivaClose}>
+              Close
+            </Button>
+          </ModalFooter>
+        </ModalContent>
+      </Modal>
+    </Flex>
+  );
+};
+
+export default StudentDashboard;
