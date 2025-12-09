@@ -1,6 +1,3 @@
-import React, { useState } from 'react';
-import { teamApi } from '../config/api';
-import { User, X, Plus, AlertCircle } from 'lucide-react';
 import {
     Box,
     Flex,
@@ -13,14 +10,9 @@ import {
     Icon,
     useToast,
     Badge,
-    Spinner,
     FormControl,
     FormLabel,
-    List,
-    ListItem,
     IconButton,
-    InputGroup,
-    InputRightElement
 } from '@chakra-ui/react';
 
 interface TeamMember {
