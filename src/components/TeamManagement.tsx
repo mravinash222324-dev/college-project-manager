@@ -1,3 +1,4 @@
+import React, { useState } from 'react'; import { teamApi } from '../config/api'; import { User, X, Plus, AlertCircle } from 'lucide-react';
 import {
     Box,
     Flex,
