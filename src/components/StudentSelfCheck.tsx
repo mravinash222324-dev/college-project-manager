@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
@@ -24,10 +23,13 @@ import {
 } from '@chakra-ui/react';
 
 import { motion } from 'framer-motion';
-import * as Lucide from "lucide-react";
+import {
+    AlertTriangle,
+    GraduationCap,
+    Zap,
+    BookOpen,
+} from "lucide-react";
 import Layout from './Layout';
-
-const { ShieldCheck, AlertTriangle, CheckCircle, GraduationCap, RefreshCw, Zap, BookOpen } = Lucide;
 
 const MotionBox = motion(Box);
 
@@ -47,11 +49,10 @@ interface MockGradingResult {
 const StudentSelfCheck: React.FC = () => {
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<MockGradingResult | null>(null);
-    const [project, setProject] = useState<any>(null); // To store basic project details
+    const [project, setProject] = useState<any>(null);
     const [error, setError] = useState('');
     const toast = useToast();
 
-    // Fetch Student Project Details on Load
     useEffect(() => {
         const fetchProject = async () => {
             try {
@@ -73,12 +74,10 @@ const StudentSelfCheck: React.FC = () => {
         setLoading(true);
         setError('');
         try {
-            // Direct call to AI Microservice (or via Django Proxy if preferred)
-            // Assuming direct call for now as CORS is open on 8001
             const response = await axios.post('http://127.0.0.1:8001/mock-grading', {
                 project_title: project.title,
                 project_description: project.abstract,
-                repo_link: project.github_link || "https://github.com/example/repo" // Fallback or user input if missing
+                repo_link: project.github_link || "https://github.com/example/repo"
             });
 
             setResult(response.data);
@@ -107,13 +106,14 @@ const StudentSelfCheck: React.FC = () => {
         <Layout userRole="Student">
             <Container maxW="container.xl" py={8}>
                 <VStack spacing={8} align="stretch">
+
                     {/* Header */}
                     <HStack justify="space-between" align="flex-start" wrap="wrap">
                         <VStack align="start" spacing={2}>
                             <Heading
                                 as="h1"
                                 size="2xl"
-                                bgGradient="linear(to-r, cyan.400, purle.400)"
+                                bgGradient="linear(to-r, cyan.400, purple.400)"
                                 bgClip="text"
                                 letterSpacing="tight"
                             >
@@ -146,13 +146,10 @@ const StudentSelfCheck: React.FC = () => {
 
                     {/* Results Area */}
                     {result && (
-                        <MotionBox
-                            initial={{ opacity: 0, y: 20 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.5 }}
-                        >
+                        <MotionBox initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
                             <SimpleGrid columns={{ base: 1, lg: 3 }} spacing={6}>
-                                {/* Main Score Card */}
+
+                                {/* Score Card */}
                                 <Card bg="rgba(255,255,255,0.03)" backdropFilter="blur(10px)" borderRadius="xl" border="1px solid" borderColor={getGradeColor(result.predicted_grade) + ".500"}>
                                     <CardBody textAlign="center" py={10}>
                                         <VStack spacing={4}>
@@ -161,13 +158,7 @@ const StudentSelfCheck: React.FC = () => {
                                             <Heading size="4xl" color={getGradeColor(result.predicted_grade) + ".400"}>
                                                 {result.predicted_grade}/100
                                             </Heading>
-                                            <Badge
-                                                fontSize="2xl"
-                                                colorScheme={getGradeColor(result.predicted_grade)}
-                                                px={4}
-                                                py={1}
-                                                borderRadius="md"
-                                            >
+                                            <Badge fontSize="2xl" colorScheme={getGradeColor(result.predicted_grade)} px={4} py={1} borderRadius="md">
                                                 Grade: {result.letter_grade}
                                             </Badge>
                                         </VStack>
@@ -185,7 +176,9 @@ const StudentSelfCheck: React.FC = () => {
                                                 <Box key={key}>
                                                     <HStack justify="space-between" mb={1}>
                                                         <Text textTransform="capitalize" color="gray.300">{key}</Text>
-                                                        <Text fontWeight="bold" color="white">{value}/{(key === 'quality' || key === 'completeness') ? 30 : 20}</Text>
+                                                        <Text fontWeight="bold" color="white">
+                                                            {value}/{(key === 'quality' || key === 'completeness') ? 30 : 20}
+                                                        </Text>
                                                     </HStack>
                                                     <Progress
                                                         value={(value / ((key === 'quality' || key === 'completeness') ? 30 : 20)) * 100}
