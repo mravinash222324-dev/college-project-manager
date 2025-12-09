@@ -8,27 +8,21 @@ import {
     VStack,
     HStack,
     Button,
-    Spinner,
     Alert,
     AlertIcon,
     SimpleGrid,
     Badge,
     Progress,
     Container,
-    Divider,
     useToast,
     Card,
     CardHeader,
     CardBody,
-    CardFooter,
     List,
     ListItem,
     ListIcon,
-    Stat,
-    StatLabel,
-    StatNumber,
-    StatHelpText,
 } from '@chakra-ui/react';
+
 import { motion } from 'framer-motion';
 import * as Lucide from "lucide-react";
 import Layout from './Layout';
